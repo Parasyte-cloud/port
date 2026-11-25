@@ -2,7 +2,7 @@
 // the command log is kept in this browser's localStorage so changes survive a reload.
 import { createEngine } from '../core/engine.js';
 import { makeQueries } from '../core/queries.js';
-import { buildSeed } from '../core/seed.js';
+import { buildSeed, DEMO_PASSWORD } from '../core/seed.js';
 import { hashPassword, sha256 } from '../core/sha256.js';
 
 const KEY = 'pcs.showcase.v1';
@@ -31,6 +31,8 @@ export function createLocalApi() {
 
   return {
     mode: 'local',
+    config: async () => ({ mode: 'local', demoMode: true, demoPassword: DEMO_PASSWORD, inviteOnly: false, mfaOrgTypes: [] }),
+    live() {},
     get signedIn() { return !!uid && !!E.state.users[uid]; },
     login: wrap((email, password) => {
       const lock = E.lockState(email, now()); if (lock) throw Object.assign(new Error(`Account locked until ${new Date(lock).toLocaleTimeString()} after repeated failures`), { code: 'LOCKED' });

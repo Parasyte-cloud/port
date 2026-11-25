@@ -6,14 +6,18 @@
     "test": "test"
   },
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test test/*.test.js",
-    "build": "node scripts/build-standalone.mjs"
+    "start": "npm run dev:worker",
+    "test": "node --test test/flow.test.js",
+    "build": "node scripts/build-standalone.mjs",
+    "test:worker": "node --test --test-concurrency=1 test/worker.test.js",
+    "dev:worker": "wrangler d1 migrations apply parasyte-pcs --local -c wrangler.worker.jsonc && wrangler dev -c wrangler.worker.jsonc",
+    "deploy:worker": "wrangler d1 migrations apply parasyte-pcs --remote -c wrangler.worker.jsonc && wrangler deploy -c wrangler.worker.jsonc"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.24.0",
+    "wrangler": "^4.168.0"
   },
   "type": "module",
   "engines": {

@@ -1,0 +1,33 @@
+// Parasyte PCS shared server: Cloudflare Worker + Durable Object (ledger) + D1.
+// Deploy: see README "Shared server on Cloudflare Workers". The Pages showcase keeps using wrangler.toml.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "parasyte-pcs-server",
+  "main": "worker/index.js",
+  "compatibility_date": "2025-09-01",
+  "build": { "command": "node scripts/build-site.mjs" },
+  "assets": { "directory": "./build/site", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [
+    // D1 database parasyte-pcs (created 2026-11-25, Western Europe; tables from migrations/0001_init.sql loaded)
+    { "binding": "DB", "database_name": "parasyte-pcs", "database_id": "8a3c0090-bbf7-4da0-870c-4f1083e54c93", "migrations_dir": "migrations" }
+  ],
+  "durable_objects": { "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }],
+  "observability": { "enabled": true },
+  "vars": {
+    // on = shared demo personas with the published demo password, one-click persona sign-in, data reset.
+    // off = invited users only; demo personas cannot sign in.
+    "DEMO_MODE": "on",
+    // Organisation types that must use 2-step verification (shared demo personas are exempt while DEMO_MODE=on).
+    "MFA_ORG_TYPES": "NPA,CUSTOMS,BANK",
+    // showcase = seeded scenario; empty = blank platform, first Port Authority admin created via /api/setup.
+    "SEED": "showcase",
+    // Public URL used in invitation and reset links (defaults to the request origin).
+    "APP_URL": ""
+  }
+  // Secrets (npx wrangler secret put NAME -c wrangler.worker.jsonc):
+  //   PCS_SECRET     required, 32+ random characters. Keys password pepper, 2FA encryption, socket tickets.
+  //                  Do not rotate without resetting every password: existing hashes depend on it.
+  //   SETUP_TOKEN    optional, 16+ characters, enables POST /api/setup for the first administrator.
+  //   RESEND_API_KEY + MAIL_FROM   optional, turns on real email for invites and self-service reset.
+}

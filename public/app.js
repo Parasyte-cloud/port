@@ -4,6 +4,8 @@ import { DEMO_ORGS, DEMO_PASSWORD } from '../core/seed.js';
 import { validContainerNo, makeContainerNo, ORG_TYPES, PORTS, CPC, TARIFF, PERMISSIONS, DEFAULT_SETTINGS } from '../core/reference.js';
 
 let api, S = null; // S = session
+let CFG = { demoMode: true, inviteOnly: false }; // server sign-in policy (see /api/config)
+let AUTH = null; // pending sign-in step on the server: { stage: 'mfa' | 'mfa_setup' }
 const app = () => document.getElementById('app');
 const view = { tab: {} };
 const BRAND = 'Parasyte PCS';
@@ -12,7 +14,7 @@ const LOGO = `<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><re
 const NAV = [
   ['Operate', [['home', 'Work queue', '*'], ['shipments', 'Shipments', '*'], ['voyages', 'Vessel calls', 'NPA CUSTOMS SHIPPING TERMINAL AUDIT'], ['berths', 'Berth plan', 'NPA SHIPPING TERMINAL AUDIT'], ['customs', 'Declarations', 'CUSTOMS NPA AUDIT FORWARDER IMPORTER'], ['requests', 'Service requests', 'NPA CUSTOMS SHIPPING TERMINAL FORWARDER IMPORTER OGA TRANSPORTER AUDIT'], ['yard', 'Yard', 'TERMINAL NPA CUSTOMS AUDIT'], ['gate', 'Gate', 'TERMINAL NPA AUDIT'], ['payments', 'Payments', '*']]],
   ['Oversee', [['inbox', 'Notifications', '*'], ['audit', 'Audit trail', '*'], ['reports', 'Reports & KPIs', '*'], ['directory', 'Common data', '*']]],
-  ['Administer', [['integration', 'Integrations', '*'], ['access', 'Organisation & access', '*'], ['config', 'Configuration', 'NPA']]],
+  ['Administer', [['integration', 'Integrations', '*'], ['access', 'Organisation & access', '*'], ['account', 'My account & security', '*'], ['config', 'Configuration', 'NPA']]],
 ];
 
 // ------------------------------------------------------------------ boot
@@ -21,21 +23,45 @@ export async function start(adapter) {
   document.addEventListener('click', onClick);
   document.addEventListener('submit', onSubmit);
   window.addEventListener('hashchange', () => render());
-  api.subscribe(() => scheduleRefresh());
+  api.subscribe(onLive);
   window.addEventListener('pcs:modalclosed', () => { if (pendingRefresh) { pendingRefresh = false; scheduleRefresh(); } });
-  if (api.signedIn) { try { S = await api.q('session'); } catch { api.logout(); } }
+  try { CFG = await api.config(); } catch {}
+  if (api.signedIn) {
+    try {
+      if (api.mode === 'server') { const me = await api.me(); if (me.stage !== 'full') AUTH = { stage: me.stage }; }
+      if (!AUTH) { S = await api.q('session'); api.live(); }
+    } catch { api.logout(); S = null; AUTH = null; }
+  }
   render();
+}
+// Live hand-over: every committed change refreshes open screens; notices addressed to my organisation pop up.
+function onLive(ev) {
+  if (ev.t === 'signedout') { if (S || AUTH) { S = null; AUTH = null; closeModal(); toast('You were signed out. Please sign in again.', 'err'); location.hash = ''; render(); } return; }
+  if (ev.t === 'live') { const d = document.getElementById('live-dot'); if (d) { d.classList.toggle('on', ev.up); d.title = ev.up ? 'Live: changes by other users appear instantly' : 'Reconnecting…'; } return; }
+  if (ev.t === 'reset') toast('The showcase data was reset by the Port Authority administrator.');
+  if (ev.t === 'commit' && ev.notices?.length) ev.notices.slice(0, 3).forEach((n) => handoverToast(n, ev.by));
+  scheduleRefresh();
+}
+function handoverToast(n, by) {
+  let box = document.querySelector('.toasts'); if (!box) { box = document.createElement('div'); box.className = 'toasts'; box.setAttribute('role', 'status'); document.body.appendChild(box); }
+  const t = document.createElement('div'); t.className = 'toast handover';
+  const href = n.ref?.type === 'bl' ? `bl-${n.ref.id}` : n.ref?.type === 'voyage' ? `voyage-${n.ref.id}` : 'inbox';
+  t.innerHTML = `<div class="tiny" style="opacity:.8">${by?.name ? `From ${esc(by.name)}, ${esc(by.orgName || '')}` : 'Platform update'}</div><b>${esc(n.title)}</b><div class="small">${esc(n.body || '')}</div><button class="btn sm" data-act="go" data-href="${esc(href)}" style="margin-top:6px">Open</button>`;
+  box.appendChild(t); setTimeout(() => t.remove(), 12000);
 }
 let refreshT = null, pendingRefresh = false;
 function scheduleRefresh() { if (modalOpen()) { pendingRefresh = true; return; } clearTimeout(refreshT); refreshT = setTimeout(async () => { if (!S) return; try { S = await api.q('session'); } catch {} render(true); }, 150); }
 
-const route = () => { const h = decodeURIComponent(location.hash.slice(1)); const m = h.match(/^(bl|voyage)-(.+)$/); return m ? { v: m[1], arg: m[2] } : { v: h || 'home' }; };
+const route = () => { const h = decodeURIComponent(location.hash.slice(1)); const k = h.match(/^(invite|reset)\/(.+)$/); if (k) return { v: k[1], arg: k[2] }; const m = h.match(/^(bl|voyage)-(.+)$/); return m ? { v: m[1], arg: m[2] } : { v: h || 'home' }; };
 const go = (h) => { if (location.hash === '#' + h) render(); else location.hash = h; };
 
 async function render(soft) {
   const r = route();
   if (r.v === 'track' && !S) return renderPublic('track');
-  if (r.v === 'register' && !S) return renderPublic('register');
+  if (r.v === 'register' && !S && !CFG.inviteOnly) return renderPublic('register');
+  if (r.v === 'invite' || r.v === 'reset') return renderLinkPage(r.v, r.arg);
+  if (r.v === 'forgot' && !S) return renderForgot();
+  if (AUTH) return renderStepUp();
   if (!S) return renderLogin();
   const y = window.scrollY;
   if (!document.querySelector('.shell')) app().innerHTML = shellHtml();
@@ -44,7 +70,7 @@ async function render(soft) {
   const fn = VIEWS[r.v] || VIEWS.home;
   if (!soft) main.innerHTML = '<div class="empty">Loading…</div>';
   try { main.innerHTML = await fn(r.arg); }
-  catch (e) { main.innerHTML = `<div class="panel"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`; console.error(e); }
+  catch (e) { if (!S) return; main.innerHTML = `<div class="panel"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`; console.error(e); }
   if (soft) window.scrollTo(0, y); else window.scrollTo(0, 0);
   document.querySelectorAll('[data-pane]').forEach((p) => (p.hidden = p.dataset.pane !== (view.tab[p.dataset.group] || p.dataset.default)));
   document.querySelectorAll('.tabs button[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === (view.tab[b.dataset.group] || b.closest('.tabs').dataset.default)));
@@ -56,12 +82,12 @@ const navAllowed = (roles) => roles === '*' || roles.split(' ').includes(S.org.t
 
 function shellHtml() {
   return `<div class="shell"><aside class="rail" id="rail"><div class="brand">${LOGO}<div><b>${BRAND}</b><span>Port Community System</span></div></div><nav class="nav" id="nav" aria-label="Modules"></nav>
-    <div class="rail-foot">${api.mode === 'local' ? 'Showcase mode: runs in this browser with seeded data. Changes stay on this device.' : 'Connected to PCS server.'}<br>Track cargo: <a href="#track" style="color:#8ec6ea">public tracker</a></div></aside>
+    <div class="rail-foot">${api.mode === 'local' ? 'Showcase mode: runs in this browser with seeded data. Changes stay on this device.' : `<span class="live-dot" id="live-dot" title="Connecting…"></span> Shared PCS server: everyone sees the same records live.`}<br>Track cargo: <a href="#track" style="color:#8ec6ea">public tracker</a></div></aside>
     <div class="main"><div class="demo-banner">Showcase build with simulated data, payments and integrations. Values tagged <span class="guess">GUESS</span> are placeholders to confirm with the authorities.</div>
     <header class="topbar"><button class="btn sm menu-btn" data-act="menu" aria-label="Open menu">☰</button>
       <form class="search" data-form="search" role="search"><input id="gsearch" name="q" placeholder="Search B/L, container, declaration or consignee" aria-label="Search"></form>
       <span class="clock" id="clock" title="Platform clock (demo time can be advanced in Configuration)"></span>
-      <div class="who"><div class="org"><b id="who-name"></b><span id="who-org"></span></div><button class="btn sm" data-act="switch">Switch role</button><button class="btn sm ghost" data-act="logout">Sign out</button></div></header>
+      <div class="who"><div class="org"><b id="who-name"></b><span id="who-org"></span></div>${CFG.demoMode ? '<button class="btn sm" data-act="switch">Switch role</button>' : ''}<button class="btn sm ghost" data-act="logout">Sign out</button></div></header>
     <main class="content" id="main"></main></div></div>`;
 }
 async function updateShell(active) {
@@ -69,6 +95,7 @@ async function updateShell(active) {
   document.getElementById('who-org').textContent = `${S.org.name} · ${S.org.typeLabel}`;
   document.getElementById('clock').textContent = new Date(S.now).toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) + (S.clockOffset ? ` (+${Math.round(S.clockOffset / 3600e3)}h)` : '');
   let wq = 0; try { wq = (await api.q('workQueue')).length; } catch {}
+  if (!S) return;
   document.getElementById('nav').innerHTML = NAV.map(([g, items]) => {
     const vis = items.filter(([, , roles]) => navAllowed(roles)).filter(([k]) => k !== 'config' || S.user.admin);
     if (!vis.length) return '';
@@ -83,16 +110,17 @@ function renderLogin() {
   for (const o of DEMO_ORGS) (groups[o.type] = groups[o.type] || []).push(o);
   const order = ['NPA', 'CUSTOMS', 'SHIPPING', 'TERMINAL', 'FORWARDER', 'IMPORTER', 'OGA', 'BANK', 'TRANSPORTER', 'AUDIT'];
   const personas = order.flatMap((t) => (groups[t] || []).slice(0, t === 'OGA' ? 2 : 1).flatMap((o) => [[o.admin, o], ...(o.extra || []).map((x) => [x, o])]));
+  const demo = CFG.demoMode;
   app().innerHTML = `<div class="login">
     <section class="login-hero"><div class="brand" style="padding:0">${LOGO}<div><b>${BRAND}</b><span>Port Community System</span></div></div>
       <h1>One platform for every port transaction, from manifest to gate-out.</h1>
       <p>Shipping lines, terminals, Customs, agencies, forwarders, banks and hauliers work on the same shipment record. Data is captured once, approvals run in parallel, payments are consolidated, and every action lands in a tamper-evident audit trail.</p>
       ${flowHtml(STEPS.map(([n, label, who]) => ({ n, label, who })))}
-      <p class="small">Showcase build: seeded with 5 vessel calls, 17 bills of lading and 20 organisations. Payments, e-mail, SMS and partner systems are simulated.</p></section>
+      <p class="small">${demo ? 'Showcase build: seeded with 5 vessel calls, 17 bills of lading and 20 organisations. Payments, e-mail, SMS and partner systems are simulated.' : 'Access is by invitation. Your organisation administrator, or the Port Authority for new organisations, sends you a sign-in link.'}</p></section>
     <section class="login-side">
-      <div><div class="eyebrow">Sign in as a demo participant</div><h2 style="margin-top:4px">Pick a role to see its work queue</h2><p class="muted small" style="margin:4px 0 0">Every role sees only its own shipments, actions and data. Password for all demo users: <span class="mono">${DEMO_PASSWORD}</span></p></div>
-      <div class="personas">${personas.map(([[name, email, title], o]) => `<button class="persona" data-act="persona" data-email="${esc(email)}"><b>${esc(ORG_TYPES[o.type].short)}${o.category ? ' · ' + esc(titleCase(o.category)) : ''}: ${esc(name)}</b><span>${esc(title)}, ${esc(o.name)}</span></button>`).join('')}</div>
-      <form class="panel stack" data-form="login"><h3>Or sign in with email</h3><div class="form-grid">${field('email', 'Email', { type: 'email', required: true, attrs: 'autocomplete="username"' })}${field('password', 'Password', { type: 'password', required: true, attrs: 'autocomplete="current-password"' })}</div><div class="row"><button class="btn primary" type="submit">Sign in</button><a class="btn ghost" href="#register">Register an organisation</a><a class="btn ghost" href="#track">Track cargo</a></div></form>
+      ${demo ? `<div><div class="eyebrow">Sign in as a demo participant</div><h2 style="margin-top:4px">Pick a role to see its work queue</h2><p class="muted small" style="margin:4px 0 0">Every role sees only its own shipments, actions and data. ${api.mode === 'server' ? 'Demo personas are shared by everyone testing this server, so you can hand work to a colleague on another device. ' : ''}Password for all demo users: <span class="mono">${esc(CFG.demoPassword || DEMO_PASSWORD)}</span></p></div>
+      <div class="personas">${personas.map(([[name, email, title], o]) => `<button class="persona" data-act="persona" data-email="${esc(email)}"><b>${esc(ORG_TYPES[o.type].short)}${o.category ? ' · ' + esc(titleCase(o.category)) : ''}: ${esc(name)}</b><span>${esc(title)}, ${esc(o.name)}</span></button>`).join('')}</div>` : `<div><div class="eyebrow">Parasyte PCS</div><h2 style="margin-top:4px">Sign in</h2></div>`}
+      <form class="panel stack" data-form="login"><h3>${demo ? 'Or sign in with email' : 'Sign in with your work email'}</h3><div class="form-grid">${field('email', 'Email', { type: 'email', required: true, attrs: 'autocomplete="username"' })}${field('password', 'Password', { type: 'password', required: true, attrs: 'autocomplete="current-password"' })}</div><div class="row"><button class="btn primary" type="submit">Sign in</button>${api.mode === 'server' ? '<a class="btn ghost" href="#forgot">Forgot password?</a>' : ''}${CFG.inviteOnly ? '' : '<a class="btn ghost" href="#register">Register an organisation</a>'}<a class="btn ghost" href="#track">Track cargo</a></div>${CFG.inviteOnly ? '<p class="tiny muted" style="margin:0">New organisation? Accounts are by invitation: the Port Authority onboards organisations, and each organisation’s administrator invites its own staff.</p>' : ''}</form>
     </section></div>`;
 }
 
@@ -137,10 +165,17 @@ async function onSubmit(e) {
 const fd2o = (fd) => Object.fromEntries([...fd.entries()].map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v]));
 async function cmd(type, payload, okMsg) { const r = await api.cmd(type, payload); if (okMsg) toast(typeof okMsg === 'function' ? okMsg(r) : okMsg); return r; }
 
-FORMS.login = async (fd) => { const { email, password } = fd2o(fd); await api.login(email, password); S = await api.q('session'); location.hash = 'home'; render(); };
-ACT.persona = async ({ email }) => { await api.login(email, DEMO_PASSWORD); S = await api.q('session'); toast(`Signed in as ${S.user.name}, ${S.org.name}`); location.hash = 'home'; document.querySelector('.shell')?.remove(); render(); };
-ACT.logout = () => { api.logout(); S = null; location.hash = ''; render(); };
-ACT.switch = () => { api.logout(); S = null; location.hash = ''; renderLogin(); };
+async function afterSignIn(r, greet) {
+  if (r && r.stage && r.stage !== 'full') { AUTH = { stage: r.stage }; S = null; location.hash = ''; return render(); }
+  AUTH = null; S = await api.q('session'); api.live();
+  if (greet) toast(`Signed in as ${S.user.name}, ${S.org.name}`);
+  if (!location.hash || /^#(invite|reset|forgot)/.test(location.hash)) location.hash = 'home';
+  document.querySelector('.shell')?.remove(); render();
+}
+FORMS.login = async (fd) => { const { email, password } = fd2o(fd); await afterSignIn(await api.login(email, password)); };
+ACT.persona = async ({ email }) => { location.hash = ''; await afterSignIn(await api.login(email, CFG.demoPassword || DEMO_PASSWORD), true); };
+ACT.logout = () => { api.logout(); S = null; AUTH = null; location.hash = ''; render(); };
+ACT.switch = () => { api.logout(); S = null; AUTH = null; location.hash = ''; renderLogin(); };
 ACT.menu = () => document.getElementById('rail').classList.toggle('open');
 ACT.go = ({ href }) => go(href);
 ACT.tab = ({ group, tab }) => { view.tab[group] = tab; document.querySelectorAll(`[data-pane][data-group="${group}"]`).forEach((p) => (p.hidden = p.dataset.pane !== tab)); document.querySelectorAll(`.tabs button[data-group="${group}"]`).forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); };
@@ -438,7 +473,7 @@ ACT.auditmore = () => { view.auditLimit = (view.auditLimit || 100) + 200; render
 ACT.verify = async () => { const r = await api.q('auditVerify'); document.getElementById('verify-out').innerHTML = r.ok ? `<div class="note">Chain intact: all ${r.entries} entries re-hashed and linked correctly. Head <span class="hash">${esc(r.head)}</span>.</div>` : `<div class="errors">Chain broken at entry #${r.brokenAt}: ${esc(r.reason)}</div>`; };
 ACT.rebuild = async () => { const r = await api.rebuild(); document.getElementById('verify-out').innerHTML = `<div class="note">Rebuilt the entire platform state by replaying ${r.replayed} logged commands in ${r.ms} ms. Resulting audit head ${r.identical ? '<b>matches</b>' : '<b>DIFFERS from</b>'} the live state, proving the log is a complete recovery source.</div>`; };
 ACT.csv = async () => {
-  if (api.mode === 'server') { const a = document.createElement('a'); a.href = api.auditCsvUrl(); a.click(); return; }
+  if (api.mode === 'server') { const blob = new Blob([await api.auditCsv()], { type: 'text/csv' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'pcs-audit.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); return; }
   const csv = await api.auditCsv(); openModal({ title: 'Audit export (CSV)', sub: 'Copy the text below into a .csv file. Direct downloads are disabled in this preview.', body: `<textarea id="f-csvout" style="min-height:260px" readonly>${esc(csv)}</textarea><button type="button" class="btn" data-act="copycsv">Copy to clipboard</button>`, cancel: 'Close' });
 };
 ACT.copycsv = async () => { const ta = document.getElementById('f-csvout'); try { await navigator.clipboard.writeText(ta.value); toast('Copied'); } catch { ta.select(); toast('Selected. Press Ctrl+C / ⌘C to copy.'); } };
@@ -489,19 +524,22 @@ ACT.apikey = async () => { const r = await api.cmd('org.apikey.rotate', {}); ope
 
 VIEWS.access = async () => {
   const a = await api.q('admin');
+  const acc = api.mode === 'server' && S.user.admin ? await api.accounts().catch(() => ({})) : null;
+  const signin = (u) => { const x = acc?.[u.id]; if (!x) return ''; if (x.demo) return '<span class="pill">Demo persona</span>'; if (x.hasPassword) return `${x.locked ? '<span class="pill bad">Locked</span> ' : ''}${x.mfa ? '<span class="pill ok">2-step on</span>' : x.mfaRequired ? '<span class="pill warn">2-step at next sign-in</span>' : '<span class="pill">Password</span>'}`; return x.pendingLink ? `<span class="pill warn">Invited</span> <span class="tiny muted">until ${dshort(x.pendingLink.expiresAt)}</span>` : '<span class="pill">Not invited</span>'; };
+  const canLink = (o, u) => acc?.[u.id] && !acc[u.id].demo && u.active && u.id !== S.user.id && (o.id === S.org.id || u.admin);
   const types = Object.keys(ORG_TYPES);
-  return `${head('Organisation & access', a.canApprove ? 'Approve or reject registrations, suspend participants, and review what each role may do.' : 'Manage your organisation’s users.')}
+  return `${head('Organisation & access', a.canApprove ? (CFG.inviteOnly ? 'Onboard organisations by invitation, suspend participants, and review what each role may do.' : 'Approve or reject registrations, suspend participants, and review what each role may do.') : 'Manage your organisation’s users.', a.canApprove && api.mode === 'server' ? '<button class="btn primary" data-act="onboard">Onboard organisation</button>' : '')}
   ${a.orgs.map((o) => `<div class="panel"><div class="panel-head"><div><h3>${esc(o.name)}</h3><div class="small muted">${esc(o.typeLabel)} · CAC ${esc(o.rcNumber)} · TIN <span class="mono">${esc(o.tin)}</span> · registered ${dt(o.registeredAt)}</div></div><div class="row">${statusPill(o.status)}
     ${a.canApprove && o.status === 'PENDING' ? `<button class="btn action sm" data-act="orgdecide" data-id="${o.id}" data-d="approve">Approve</button><button class="btn danger sm" data-act="orgdecide" data-id="${o.id}" data-d="reject">Reject</button>` : ''}
     ${a.canApprove && o.type !== 'NPA' && ['ACTIVE', 'SUSPENDED'].includes(o.status) ? `<button class="btn sm" data-act="orgsuspend" data-id="${o.id}" data-s="${o.status === 'ACTIVE'}">${o.status === 'ACTIVE' ? 'Suspend' : 'Reinstate'}</button>` : ''}
-    ${o.id === S.org.id && S.user.admin ? `<button class="btn sm primary" data-act="adduser">Add user</button>` : ''}</div></div>
-    <div class="table-wrap" style="border:0"><table><tr><th>User</th><th>Email</th><th>Title</th><th>Role</th><th>Last sign-in</th><th>Status</th><th></th></tr>${o.users.map((u) => `<tr><td>${esc(u.name)}</td><td class="small mono">${esc(u.email)}</td><td class="small">${esc(u.title)}</td><td>${u.admin ? '<span class="pill info">Admin</span>' : 'Officer'}</td><td class="small">${dt(u.lastLoginAt)}</td><td>${u.active ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Deactivated</span>'}</td><td>${o.id === S.org.id && S.user.admin && u.id !== S.user.id ? `<button class="btn sm" data-act="useractive" data-id="${u.id}" data-a="${!u.active}">${u.active ? 'Deactivate' : 'Activate'}</button>` : ''}</td></tr>`).join('')}</table></div></div>`).join('')}
+    ${o.id === S.org.id && S.user.admin ? `<button class="btn sm primary" data-act="adduser">${api.mode === 'server' ? 'Invite user' : 'Add user'}</button>` : ''}</div></div>
+    <div class="table-wrap" style="border:0"><table><tr><th>User</th><th>Email</th><th>Title</th><th>Role</th><th>Last sign-in</th><th>Status</th>${acc ? '<th>Sign-in</th>' : ''}<th></th></tr>${o.users.map((u) => `<tr><td>${esc(u.name)}</td><td class="small mono">${esc(u.email)}</td><td class="small">${esc(u.title)}</td><td>${u.admin ? '<span class="pill info">Admin</span>' : 'Officer'}</td><td class="small">${dt(u.lastLoginAt)}</td><td>${u.active ? '<span class="pill ok">Active</span>' : '<span class="pill bad">Deactivated</span>'}</td>${acc ? `<td class="small">${signin(u)}</td>` : ''}<td class="row" style="flex-wrap:nowrap">${canLink(o, u) ? `<button class="btn sm" data-act="sendlink" data-id="${u.id}">${acc[u.id].hasPassword ? 'Send reset link' : acc[u.id].pendingLink ? 'Re-send invite' : 'Send invite'}</button>` : ''}${o.id === S.org.id && S.user.admin && u.id !== S.user.id ? `<button class="btn sm" data-act="useractive" data-id="${u.id}" data-a="${!u.active}">${u.active ? 'Deactivate' : 'Activate'}</button>` : ''}</td></tr>`).join('')}</table></div></div>`).join('')}
   <div class="panel"><h3>Role-based access matrix</h3><p class="small muted" style="margin-top:0">Enforced in the core engine for every screen and API call. “Admin” means only the organisation’s administrators. Data is further scoped so each organisation sees only shipments it is party to.</p>
     <div class="table-wrap"><table><tr><th>Action</th>${types.map((t) => `<th title="${esc(ORG_TYPES[t].label)}">${esc(ORG_TYPES[t].short)}</th>`).join('')}</tr>${Object.entries(a.roles).filter(([k]) => !k.startsWith('auth')).map(([k, rules]) => `<tr><td class="mono tiny">${esc(k)}</td>${types.map((t) => { const r = rules.find((x) => x === '*public' || x === '*' || x === t || x === `*:admin` || x === `${t}:admin`); return `<td class="small" style="text-align:center">${!r ? '' : r.endsWith(':admin') ? 'admin' : r === '*public' ? 'public' : '●'}</td>`; }).join('')}</tr>`).join('')}</table></div></div>`;
 };
 ACT.orgdecide = ({ id, d }) => openModal({ title: d === 'approve' ? 'Approve registration' : 'Reject registration', body: field('note', d === 'approve' ? 'Verification note' : 'Reason (sent to applicant)', { value: d === 'approve' ? 'CAC and TIN verified' : '', required: d !== 'approve' }), submit: d === 'approve' ? 'Approve' : 'Reject', onSubmit: async (fd) => { await cmd('org.approve', { orgId: id, decision: d, note: fd.get('note') }, d === 'approve' ? 'Organisation approved and notified' : 'Registration rejected'); } });
 ACT.orgsuspend = ({ id, s }) => openModal({ title: s === 'true' ? 'Suspend organisation' : 'Reinstate organisation', body: field('reason', 'Reason', { required: true }), submit: 'Confirm', onSubmit: async (fd) => { await cmd('org.suspend', { orgId: id, suspended: s === 'true', reason: fd.get('reason') }, 'Done'); } });
-ACT.adduser = () => openModal({ title: 'Add user', body: `<div class="form-grid">${field('name', 'Full name', { required: true })}${field('email', 'Email', { type: 'email', required: true })}${field('title', 'Job title')}${field('password', 'Initial password (8+ characters)', { type: 'password', required: true })}</div><label class="row small"><input type="checkbox" name="admin" id="f-admin"> Organisation administrator</label>`, submit: 'Add user', onSubmit: async (fd) => { const o = fd2o(fd); await cmd('user.create', { ...o, admin: !!o.admin }, 'User added'); } });
+ACT.adduser = () => api.mode === 'server' ? openModal({ title: 'Invite user', sub: 'They get a single-use link to choose their own password. Nobody else ever sees it.', body: `<div class="form-grid">${field('name', 'Full name', { required: true })}${field('email', 'Work email', { type: 'email', required: true })}${field('title', 'Job title')}</div><label class="row small"><input type="checkbox" name="admin" id="f-admin"> Organisation administrator</label>`, submit: 'Create invitation', onSubmit: async (fd) => { const o = fd2o(fd); const r = await cmd('user.create', { ...o, admin: !!o.admin }); setTimeout(() => showLink(r.invite, o.email, 'invite'), 50); } }) : openModal({ title: 'Add user', body: `<div class="form-grid">${field('name', 'Full name', { required: true })}${field('email', 'Email', { type: 'email', required: true })}${field('title', 'Job title')}${field('password', 'Initial password (8+ characters)', { type: 'password', required: true })}</div><label class="row small"><input type="checkbox" name="admin" id="f-admin"> Organisation administrator</label>`, submit: 'Add user', onSubmit: async (fd) => { const o = fd2o(fd); await cmd('user.create', { ...o, admin: !!o.admin }, 'User added'); } });
 ACT.useractive = ({ id, a }) => cmd('user.setActive', { userId: id, active: a === 'true' }, 'User updated');
 
 VIEWS.config = async () => {
@@ -518,3 +556,96 @@ ACT.clock = ({ h }) => cmd('clock.advance', { hours: Number(h) }, `Clock advance
 ACT.reset = () => openModal({ title: 'Reset showcase data?', body: '<p>This discards every change made since the seeded scenario was loaded and restores the original 17 shipments.</p>', submit: 'Reset', submitClass: 'danger', onSubmit: async () => { await api.reset(); toast('Showcase reset'); S = await api.q('session').catch(() => null); if (!S) { api.logout(); } go('home'); } });
 
 VIEWS.track = async () => { setTimeout(() => view.trackRef && doTrack(view.trackRef)); return `${head('Track cargo', 'The same public status view that cargo owners and the public can use without signing in.')}<form class="panel row" data-form="track"><input name="ref" id="f-ref" value="${esc(view.trackRef || '')}" placeholder="B/L or container number" style="flex:1" aria-label="B/L or container number"><button class="btn primary">Track</button></form><div id="track-out"></div>`; };
+
+// ------------------------------------------------------------------ sign-in, invitations, 2-step verification (shared server)
+function showLink(l, email, purpose) {
+  if (!l) return;
+  openModal({ title: purpose === 'invite' ? 'Invitation ready' : 'Reset link ready', sub: l.emailed ? `Emailed to ${esc(email)}. You can also copy it below.` : `Email is not switched on for this server, so send this link to ${esc(email)} yourself (for example by your company email or a secure chat). It works once, until ${esc(dt(l.expiresAt))}.`,
+    body: `<div class="prefill mono" style="word-break:break-all" id="link-out">${esc(l.link)}</div><button type="button" class="btn" data-act="copylink">Copy link</button><p class="tiny muted">Anyone holding this link can set the password for this account, so share it only with that person.</p>`, cancel: 'Done' });
+}
+ACT.copylink = async () => { const t = document.getElementById('link-out').textContent; try { await navigator.clipboard.writeText(t); toast('Link copied'); } catch { toast('Select the link and copy it'); } };
+ACT.sendlink = async ({ id }) => { const r = await api.sendLink(id); const users = (await api.q('admin')).orgs.flatMap((o) => o.users); showLink(r, users.find((u) => u.id === id)?.email || 'the user', r.purpose); scheduleRefresh(); };
+ACT.onboard = () => openModal({ title: 'Onboard an organisation', sub: 'Creates the organisation as active and invites its administrator. They then invite their own staff.', wide: true,
+  body: `<div class="form-grid">${field('name', 'Organisation name', { required: true })}${field('type', 'Organisation type', { opts: Object.keys(ORG_TYPES).filter((t) => t !== 'NPA').map((t) => [t, ORG_TYPES[t].label]) })}
+    ${field('category', 'Agency category (government agencies only)', { opts: [['', '–'], ['FOOD', 'Food & drugs'], ['STANDARDS', 'Standards'], ['HEALTH', 'Port health']] })}${field('port', 'Port (terminal operators)', { opts: [['', '–'], ...Object.entries(PORTS).map(([k, p]) => [k, p.name])] })}
+    ${field('rcNumber', 'CAC registration number', { required: true, placeholder: 'RC 123456' })}${field('tin', 'Tax identification number (TIN)', { required: true, placeholder: '12345678-0001' })}
+    ${field('email', 'Organisation email', { type: 'email', required: true })}${field('phone', 'Phone', { placeholder: '+234…' })}
+    ${field('adminName', 'Administrator name', { required: true })}${field('adminEmail', 'Administrator work email', { type: 'email', required: true })}${field('adminTitle', 'Administrator job title')}${field('address', 'Address')}</div>`,
+  submit: 'Onboard and invite', onSubmit: async (fd) => { const o = fd2o(fd); if (!o.category) delete o.category; if (!o.port) delete o.port; const r = await cmd('org.register', o, 'Organisation onboarded'); setTimeout(() => showLink(r.invite, o.adminEmail, 'invite'), 50); } });
+
+const pwHint = 'At least 12 characters. A short phrase of three or four unrelated words is strong and easy to remember.';
+const authShell = (inner) => `<div class="content" style="margin:0 auto;max-width:560px;padding-top:6vh"><div class="brand auth-brand" style="padding:0 0 16px">${LOGO}<div><b>${BRAND}</b><span>Port Community System</span></div></div>${inner}</div>`;
+
+async function renderStepUp() {
+  if (AUTH.stage === 'mfa') {
+    app().innerHTML = authShell(`<form class="panel stack" data-form="mfa"><h2>2-step verification</h2><p class="muted small" style="margin:0">Enter the 6-digit code from your authenticator app. Lost your phone? Enter one of your recovery codes instead.</p>
+      ${field('code', 'Code', { required: true, attrs: 'autocomplete="one-time-code" inputmode="numeric" autofocus' })}<div class="row"><button class="btn primary">Verify</button><button type="button" class="btn ghost" data-act="logout">Cancel</button></div></form>`);
+    return document.getElementById('f-code')?.focus();
+  }
+  const m = await api.mfaSetup().catch((e) => ({ error: e.message }));
+  if (m.error) { app().innerHTML = authShell(`<div class="panel"><h2>2-step verification</h2><p>${esc(m.error)}</p><button class="btn" data-act="logout">Back to sign in</button></div>`); return; }
+  app().innerHTML = authShell(`<form class="panel stack" data-form="mfaenable"><h2>Set up 2-step verification</h2>
+    <p class="small" style="margin:0">Your organisation type requires a second step at sign-in. Scan this code with an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy), then enter the 6-digit code it shows.</p>
+    ${mfaSetupBody(m)}<div class="row"><button class="btn primary">Turn on and continue</button><button type="button" class="btn ghost" data-act="logout">Cancel</button></div></form>`);
+  drawQr(m.otpauth);
+}
+const mfaSetupBody = (m) => `<div id="qr" style="margin:0 auto;width:max-content;background:#fff;padding:8px;border-radius:8px" role="img" aria-label="QR code for your authenticator app"></div>
+    <details class="small"><summary>Can’t scan? Enter this key by hand</summary><div class="prefill mono" style="word-break:break-all">${esc(m.secret.replace(/(.{4})/g, '$1 ').trim())}</div><div class="tiny muted">Type: time-based, 6 digits, every 30 seconds.</div></details>
+    ${field('code', '6-digit code', { required: true, attrs: 'autocomplete="one-time-code" inputmode="numeric"' })}`;
+async function drawQr(text) {
+  try { const { default: qrcode } = await import('./vendor/qrcode.mjs'); const q = qrcode(0, 'M'); q.addData(text); q.make(); document.getElementById('qr').innerHTML = q.createSvgTag({ cellSize: 5, margin: 2, scalable: false }); }
+  catch (e) { console.warn(e); document.getElementById('qr').textContent = 'QR code unavailable; use the key below.'; }
+}
+FORMS.mfa = async (fd) => { await api.mfaVerify(fd.get('code')); await afterSignIn({ stage: 'full' }, true); };
+FORMS.mfaenable = async (fd) => { const r = await api.mfaEnable(fd.get('code')); await afterSignIn({ stage: 'full' }, true); showRecovery(r.recoveryCodes); };
+function showRecovery(codes) {
+  openModal({ title: 'Save your recovery codes', sub: 'Each code works once if you lose your phone. Store them somewhere safe, such as a password manager. They will not be shown again.', body: `<div class="prefill mono" id="link-out" style="columns:2;white-space:pre-line">${codes.map(esc).join('\n')}</div><button type="button" class="btn" data-act="copylink">Copy codes</button>`, cancel: 'I have saved them' });
+}
+
+async function renderLinkPage(kind, token) {
+  if (S || AUTH) { api.logout(); S = null; AUTH = null; }
+  app().innerHTML = authShell('<div class="panel empty">Checking your link…</div>');
+  let info; try { info = await api.inspectLink(token); } catch (e) { app().innerHTML = authShell(`<div class="panel stack"><h2>Link not valid</h2><p>${esc(e.message)}</p><a class="btn" href="#">Go to sign in</a></div>`); return; }
+  view.linkToken = token;
+  app().innerHTML = authShell(`<form class="panel stack" data-form="redeem"><h2>${info.purpose === 'invite' ? `Welcome, ${esc(info.name)}` : 'Choose a new password'}</h2>
+    <p class="small muted" style="margin:0">${info.purpose === 'invite' ? `You have been invited to ${esc(info.orgName)} on ${BRAND}. Choose a password to finish setting up your account.` : `Resetting the password for ${esc(info.email)}. All your other sessions will be signed out.`}${info.mfaRequired ? ' Your organisation also requires 2-step verification, which you will set up next.' : ''}</p>
+    <input type="email" name="username" value="${esc(info.email)}" autocomplete="username" hidden>
+    ${field('password', 'New password', { type: 'password', required: true, attrs: 'autocomplete="new-password" minlength="12"' })}${field('confirm', 'Type it again', { type: 'password', required: true, attrs: 'autocomplete="new-password"' })}
+    <div class="tiny muted">${pwHint}</div><div class="row"><button class="btn primary">${info.purpose === 'invite' ? 'Create my account' : 'Set new password'}</button></div></form>`);
+}
+FORMS.redeem = async (fd) => {
+  if (fd.get('password') !== fd.get('confirm')) throw new Error('The two passwords do not match');
+  const r = await api.redeemLink(view.linkToken, fd.get('password')); view.linkToken = null; history.replaceState(null, '', location.pathname); location.hash = '';
+  toast('Password saved'); await afterSignIn(r, true);
+};
+function renderForgot() {
+  app().innerHTML = authShell(`<form class="panel stack" data-form="forgot"><h2>Forgot your password?</h2><p class="small muted" style="margin:0">${CFG.emailDelivery === 'email' ? 'Enter your work email and we will send you a reset link that works for 1 hour.' : 'Email is not switched on for this server yet. Ask your organisation administrator to send you a reset link from Organisation & access.'}</p>
+    ${CFG.emailDelivery === 'email' ? field('email', 'Work email', { type: 'email', required: true, attrs: 'autocomplete="username"' }) : ''}<div id="forgot-out"></div><div class="row">${CFG.emailDelivery === 'email' ? '<button class="btn primary">Send reset link</button>' : ''}<a class="btn ghost" href="#">Back to sign in</a></div></form>`);
+}
+FORMS.forgot = async (fd) => { const r = await api.forgot(fd.get('email')); document.getElementById('forgot-out').innerHTML = `<div class="note">${esc(r.message)}</div>`; };
+
+VIEWS.account = async () => {
+  if (api.mode !== 'server') return `${head('My account & security', '')}<div class="panel">In the in-browser showcase there is no shared sign-in. Open the hosted server to manage passwords and 2-step verification.</div>`;
+  const me = await api.me();
+  const demoAcc = me.demoAccount;
+  return `${head('My account & security', `${esc(S.user.name)} · ${esc(S.user.email)} · ${esc(S.org.name)}`)}
+  ${demoAcc ? '<div class="note small">This is a shared demo persona. Everyone testing the server signs in to it with the published demo password, so its password and 2-step settings are fixed.</div>' : ''}
+  <div class="grid g2">
+    <form class="panel stack" data-form="pwchange"><h3>Password</h3>${demoAcc ? '<p class="small muted">Not available for demo personas.</p>' : `
+      <input type="email" name="username" value="${esc(S.user.email)}" autocomplete="username" hidden>
+      ${field('current', 'Current password', { type: 'password', required: true, attrs: 'autocomplete="current-password"' })}${field('next', 'New password', { type: 'password', required: true, attrs: 'autocomplete="new-password" minlength="12"' })}<div class="tiny muted">${pwHint} Other devices are signed out.</div><div class="row"><button class="btn primary">Change password</button></div>`}</form>
+    <div class="panel stack"><h3>2-step verification</h3>
+      <p class="small" style="margin:0">${me.mfa.enabled ? '<span class="pill ok">On</span> You enter a code from your authenticator app at each sign-in.' : '<span class="pill">Off</span> Add a code from your phone to every sign-in.'}${me.mfa.required ? ' Required for your organisation.' : ''}</p>
+      <div class="row">${demoAcc ? '' : me.mfa.enabled ? (me.mfa.required ? '' : '<button class="btn" data-act="mfaoff">Turn off</button>') : '<button class="btn primary" data-act="mfaon">Turn on</button>'}</div></div>
+    <div class="panel stack"><h3>Sessions</h3><p class="small muted" style="margin:0">This session ends ${esc(dt(me.sessionExpiresAt))}, or after 2 hours without activity.</p><div class="row"><button class="btn danger" data-act="logoutall">Sign out on every device</button></div></div>
+  </div>`;
+};
+FORMS.pwchange = async (fd, f) => { await api.changePassword(fd.get('current'), fd.get('next')); f.reset(); toast('Password changed. Other devices were signed out.'); };
+ACT.mfaon = async () => {
+  const m = await api.mfaSetup();
+  openModal({ title: 'Turn on 2-step verification', sub: 'Scan the code with an authenticator app, then enter the 6-digit code it shows.', body: mfaSetupBody(m), submit: 'Turn on',
+    onSubmit: async (fd) => { const r = await api.mfaEnable(fd.get('code')); setTimeout(() => showRecovery(r.recoveryCodes), 50); scheduleRefresh(); } });
+  drawQr(m.otpauth);
+};
+ACT.mfaoff = () => openModal({ title: 'Turn off 2-step verification', body: field('password', 'Confirm with your password', { type: 'password', required: true, attrs: 'autocomplete="current-password"' }), submit: 'Turn off', submitClass: 'danger', onSubmit: async (fd) => { await api.mfaDisable(fd.get('password')); toast('2-step verification turned off'); } });
+ACT.logoutall = async () => { await api.logoutAll(); S = null; AUTH = null; location.hash = ''; render(); toast('Signed out on every device'); };
