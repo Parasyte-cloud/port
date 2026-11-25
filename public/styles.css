@@ -231,3 +231,11 @@ dl.kv dt { color: var(--muted); } dl.kv dd { margin: 0; min-width: 0; overflow-w
 }
 @media (max-width: 480px) { .g4 { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .personas { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Shared server: live connection dot and hand-over pop-ups */
+.live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #c98a1b; vertical-align: middle; margin-right: 4px; }
+.live-dot.on { background: #45c083; box-shadow: 0 0 0 3px rgba(69,192,131,.25); }
+.toast.handover { background: var(--surface, #fff); color: var(--ink); border-left: 4px solid #0a5c8a; max-width: 360px; pointer-events: auto; }
+.toast.handover .btn { color: var(--ink); }
+.auth-brand b { color: var(--ink); }
+.auth-brand span { color: var(--muted); }

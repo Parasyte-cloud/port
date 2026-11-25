@@ -76,7 +76,7 @@ export function createEngine() {
       audit(action, entity, summary, opts = {}) {
         const by = opts.system ? { system: true, name: 'PCS rules engine' } : actor
           ? { userId: actor.userId, name: actor.name, orgId: actor.orgId, orgName: actor.orgName, orgType: actor.orgType }
-          : { name: 'Public registration' };
+          : { name: String(cmd.type).startsWith('auth.') ? 'Sign-in service' : 'Public registration' };
         const entry = {
           n: S.audit.length + 1, cmdSeq: S.seq, at, by, action, entity, summary,
           trace: opts.trace || null, data: opts.data || null, prev: S.lastHash,
@@ -317,7 +317,7 @@ export function createEngine() {
     },
 
     'org.register'(ctx, p) {
-      req(p, ['name', 'type', 'email', 'tin', 'rcNumber']); req(p.admin || {}, ['name', 'email', 'passwordHash', 'salt']);
+      req(p, ['name', 'type', 'email', 'tin', 'rcNumber']); req(p.admin || {}, ['name', 'email']); // credentials are optional: the hosted server keeps them outside the ledger
       if (!R.ORG_TYPES[p.type]) fail('VALIDATION', 'Unknown organisation type');
       const byNpa = ctx.actor && ctx.actor.orgType === 'NPA' && ctx.actor.admin;
       if (R.ORG_TYPES[p.type].regulator && !byNpa && Object.keys(S.orgs).length > 0) fail('FORBIDDEN', 'Government agencies are onboarded by the Port Authority administrator');
@@ -335,7 +335,7 @@ export function createEngine() {
         status: first || byNpa ? 'ACTIVE' : 'PENDING', registeredAt: ctx.at, approvedAt: first || byNpa ? ctx.at : null, webhookUrl: p.webhookUrl || null,
       };
       S.orgs[org.id] = org;
-      const user = { id: nextId('USR', 4), orgId: org.id, name: p.admin.name, email: p.admin.email.trim().toLowerCase(), title: p.admin.title || 'Administrator', admin: true, active: true, passwordHash: p.admin.passwordHash, salt: p.admin.salt, createdAt: ctx.at };
+      const user = { id: nextId('USR', 4), orgId: org.id, name: p.admin.name, email: p.admin.email.trim().toLowerCase(), title: p.admin.title || 'Administrator', admin: true, active: true, ...(p.admin.passwordHash ? { passwordHash: p.admin.passwordHash, salt: p.admin.salt } : {}), createdAt: ctx.at };
       S.users[user.id] = user;
       ctx.audit('org.registered', { type: 'org', id: org.id }, `${org.name} (${R.ORG_TYPES[org.type].label}) registered${org.status === 'PENDING' ? ', awaiting approval' : ''}`);
       if (org.status === 'PENDING') ctx.notify([orgOfType('NPA')?.id], `Registration pending: ${org.name}`, `${R.ORG_TYPES[org.type].label} applied for access. Verify CAC ${org.rcNumber} and TIN ${org.tin}.`, { type: 'org', id: org.id }, 'action');
@@ -367,11 +367,11 @@ export function createEngine() {
     },
 
     'user.create'(ctx, p) {
-      req(p, ['name', 'email', 'passwordHash', 'salt']);
+      req(p, ['name', 'email']);
       const email = p.email.trim().toLowerCase();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fail('VALIDATION', 'Invalid email');
       if (Object.values(S.users).some((u) => u.email === email)) fail('DUPLICATE', 'A user with this email already exists');
-      const user = { id: nextId('USR', 4), orgId: ctx.actor.orgId, name: p.name, email, title: p.title || 'Officer', admin: !!p.admin, active: true, passwordHash: p.passwordHash, salt: p.salt, createdAt: ctx.at };
+      const user = { id: nextId('USR', 4), orgId: ctx.actor.orgId, name: p.name, email, title: p.title || 'Officer', admin: !!p.admin, active: true, ...(p.passwordHash ? { passwordHash: p.passwordHash, salt: p.salt } : {}), createdAt: ctx.at };
       S.users[user.id] = user;
       ctx.audit('user.created', { type: 'user', id: user.id }, `User ${user.name} <${email}> added${user.admin ? ' as administrator' : ''}`);
       ctx.result = { userId: user.id };
@@ -395,6 +395,14 @@ export function createEngine() {
       const f = S.loginFails[email] || (S.loginFails[email] = { count: 0, lockedUntil: 0 });
       f.count++; if (f.count >= 5) { f.lockedUntil = ctx.at + 15 * 60e3; f.count = 0; }
       ctx.audit('auth.failed', { type: 'user', id: email }, `Failed sign-in for ${email}${f.lockedUntil > ctx.at ? ' (account locked 15 min)' : ''}`);
+    },
+    // Security events from the hosted server's sign-in service (password set/reset, 2FA, invites, sessions).
+    // Written to the same hash-chained audit trail; only the server may issue these (never a client).
+    'auth.event'(ctx, p) {
+      req(p, ['event', 'subject']);
+      if (!/^[a-z][a-z0-9_.]{1,40}$/.test(p.event)) fail('VALIDATION', 'Bad auth event name');
+      const u = S.users[p.subject];
+      ctx.audit(`auth.${p.event}`, { type: 'user', id: p.subject }, `${u ? u.name : p.subject}: ${String(p.summary || p.event).slice(0, 200)}`);
     },
 
     'vessel.register'(ctx, p) {
@@ -902,7 +910,7 @@ export function createEngine() {
     const handler = H[cmd.type]; if (!handler) fail('UNKNOWN', `Unknown command ${cmd.type}`);
     const at = Math.max(cmd.at || 0, S.lastAt);
     const actor = cmd.userId ? actorFrom(cmd.userId) : null;
-    if (cmd.type !== 'system.init' && !['auth.failed', 'auth.login'].includes(cmd.type)) {
+    if (cmd.type !== 'system.init' && !['auth.failed', 'auth.login', 'auth.event'].includes(cmd.type)) {
       if (!allowed(cmd.type, actor)) fail('FORBIDDEN', `Your role is not permitted to perform ${cmd.type}`);
       if (actor && !actor.system) {
         if (!actor.user.active) fail('FORBIDDEN', 'User is deactivated');
@@ -952,7 +960,7 @@ export function createEngine() {
     now: (real) => Math.max(real + S.clockOffset, S.lastAt),
     onCommit: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
     findUserByEmail: (email) => Object.values(S.users).find((u) => u.email === String(email).trim().toLowerCase()),
-    verifyPassword: (user, password) => hashPassword(password, user.salt) === user.passwordHash,
+    verifyPassword: (user, password) => !!user.passwordHash && hashPassword(password, user.salt) === user.passwordHash,
     lockState: (email, at) => { const f = S.loginFails[String(email).toLowerCase()]; return f && f.lockedUntil > at ? f.lockedUntil : 0; },
     apiKeyOrg: (keyHash) => Object.entries(S.apiKeys).find(([, k]) => k.keyHash === keyHash)?.[0] || null,
   };
