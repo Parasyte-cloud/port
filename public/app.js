@@ -1,5 +1,6 @@
 // PCS web client. One codebase for the hosted server and the in-browser showcase (see api-*.js).
 import { esc, money, usd, dt, dshort, hrs, ago, titleCase, stagePill, statusPill, lane, STAGES, STEPS, MY_STEPS, blSteps, flowHtml, toast, errList, openModal, closeModal, modalOpen, field, prefilled, toLocalInput } from './ui.js';
+import { LOGO_SRC } from './logo-data.js';
 import { DEMO_ORGS, DEMO_PASSWORD } from '../core/seed.js';
 import { validContainerNo, makeContainerNo, ORG_TYPES, PORTS, CPC, TARIFF, PERMISSIONS, DEFAULT_SETTINGS } from '../core/reference.js';
 
@@ -8,8 +9,8 @@ let CFG = { demoMode: true, inviteOnly: false }; // server sign-in policy (see /
 let AUTH = null; // pending sign-in step on the server: { stage: 'mfa' | 'mfa_setup' }
 const app = () => document.getElementById('app');
 const view = { tab: {} };
-const BRAND = 'Parasyte PCS';
-const LOGO = `<svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0a5c8a"/><path d="M6 21h20l-3 5H9z" fill="#e3ebf1"/><rect x="9" y="14" width="5" height="6" fill="#f0b632"/><rect x="15" y="14" width="5" height="6" fill="#5aaedd"/><rect x="12" y="8" width="5" height="5" fill="#45c083"/><path d="M22 6v14M22 6l4 3" stroke="#e3ebf1" stroke-width="1.6" fill="none"/></svg>`;
+const BRAND = 'APAPA Technologies Ltd';
+const LOGO = `<img class="brand-mark" src="${LOGO_SRC}" alt="APAPA Technologies logo" width="36" height="36">`;
 
 const NAV = [
   ['Operate', [['home', 'Work queue', '*'], ['shipments', 'Shipments', '*'], ['voyages', 'Vessel calls', 'NPA CUSTOMS SHIPPING TERMINAL AUDIT'], ['berths', 'Berth plan', 'NPA SHIPPING TERMINAL AUDIT'], ['customs', 'Declarations', 'CUSTOMS NPA AUDIT FORWARDER IMPORTER'], ['requests', 'Service requests', 'NPA CUSTOMS SHIPPING TERMINAL FORWARDER IMPORTER OGA TRANSPORTER AUDIT'], ['yard', 'Yard', 'TERMINAL NPA CUSTOMS AUDIT'], ['gate', 'Gate', 'TERMINAL NPA AUDIT'], ['payments', 'Payments', '*']]],
@@ -119,7 +120,7 @@ function renderLogin() {
       <p class="small">${demo ? 'Showcase build: seeded with 5 vessel calls, 17 bills of lading and 20 organisations. Payments, e-mail, SMS and partner systems are simulated.' : 'Access is by invitation. Your organisation administrator, or the Port Authority for new organisations, sends you a sign-in link.'}</p></section>
     <section class="login-side">
       ${demo ? `<div><div class="eyebrow">Sign in as a demo participant</div><h2 style="margin-top:4px">Pick a role to see its work queue</h2><p class="muted small" style="margin:4px 0 0">Every role sees only its own shipments, actions and data. ${api.mode === 'server' ? 'Demo personas are shared by everyone testing this server, so you can hand work to a colleague on another device. ' : ''}Password for all demo users: <span class="mono">${esc(CFG.demoPassword || DEMO_PASSWORD)}</span></p></div>
-      <div class="personas">${personas.map(([[name, email, title], o]) => `<button class="persona" data-act="persona" data-email="${esc(email)}"><b>${esc(ORG_TYPES[o.type].short)}${o.category ? ' · ' + esc(titleCase(o.category)) : ''}: ${esc(name)}</b><span>${esc(title)}, ${esc(o.name)}</span></button>`).join('')}</div>` : `<div><div class="eyebrow">Parasyte PCS</div><h2 style="margin-top:4px">Sign in</h2></div>`}
+      <div class="personas">${personas.map(([[name, email, title], o]) => `<button class="persona" data-act="persona" data-email="${esc(email)}"><b>${esc(ORG_TYPES[o.type].short)}${o.category ? ' · ' + esc(titleCase(o.category)) : ''}: ${esc(name)}</b><span>${esc(title)}, ${esc(o.name)}</span></button>`).join('')}</div>` : `<div><div class="eyebrow">${BRAND}</div><h2 style="margin-top:4px">Sign in</h2></div>`}
       <form class="panel stack" data-form="login"><h3>${demo ? 'Or sign in with email' : 'Sign in with your work email'}</h3><div class="form-grid">${field('email', 'Email', { type: 'email', required: true, attrs: 'autocomplete="username"' })}${field('password', 'Password', { type: 'password', required: true, attrs: 'autocomplete="current-password"' })}</div><div class="row"><button class="btn primary" type="submit">Sign in</button>${api.mode === 'server' ? '<a class="btn ghost" href="#forgot">Forgot password?</a>' : ''}${CFG.inviteOnly ? '' : '<a class="btn ghost" href="#register">Register an organisation</a>'}<a class="btn ghost" href="#track">Track cargo</a></div>${CFG.inviteOnly ? '<p class="tiny muted" style="margin:0">New organisation? Accounts are by invitation: the Port Authority onboards organisations, and each organisation’s administrator invites its own staff.</p>' : ''}</form>
     </section></div>`;
 }

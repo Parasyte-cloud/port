@@ -46,7 +46,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .shell { background: linear-gradient(to right, var(--rail) 236px, transparent 236px); }
 .rail { background: var(--rail); color: var(--rail-ink); padding: 16px 10px; position: sticky; top: env(safe-area-inset-top, 0px); height: 100vh; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 .brand { display: flex; gap: 10px; align-items: center; padding: 4px 8px 10px; color: #fff; }
-.brand-mark { width: 32px; height: 32px; flex: none; }
+.brand-mark { width: 36px; height: 36px; flex: none; background: #fff; border-radius: 50%; padding: 2px; object-fit: contain; }
 .brand b { font-family: var(--f-display); font-size: 1.05rem; display: block; line-height: 1.1; }
 .brand span { font-size: .72rem; color: var(--rail-ink); }
 .nav { display: flex; flex-direction: column; gap: 2px; }

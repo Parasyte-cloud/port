@@ -1,4 +1,4 @@
-// Parasyte PCS shared server: Cloudflare Worker + Durable Object (ledger) + D1.
+// APAPA Technologies PCS shared server: Cloudflare Worker + Durable Object (ledger) + D1.
 // Deploy: see README "Shared server on Cloudflare Workers". The Pages showcase keeps using wrangler.toml.
 {
   "$schema": "node_modules/wrangler/config-schema.json",

@@ -1,4 +1,4 @@
-// Parasyte PCS on Cloudflare Workers.
+// APAPA Technologies PCS on Cloudflare Workers.
 // Static web app from Workers Static Assets; JSON API, sign-in and live updates from this Worker;
 // the shared ledger in one Durable Object (worker/ledger.js); durable data in D1.
 import * as A from './auth.js';
@@ -79,7 +79,7 @@ async function route(req, env, ctx, url, p) {
     const cred = user && await A.getCred(env, user.id);
     if (user && user.active && cred && !cred.demo && c.emailDelivery === 'email') {
       const { token } = await A.issueLink(env, L, user, 'reset', null);
-      ctx.waitUntil(A.sendMail(env, user.email, 'Reset your Parasyte PCS password', `Someone asked to reset the password for ${user.email}.\n\nOpen this link within 1 hour to choose a new password:\n${link(env, req, 'reset', token)}\n\nIf this was not you, ignore this email; your password is unchanged.`));
+      ctx.waitUntil(A.sendMail(env, user.email, 'Reset your APAPA Technologies PCS password', `Someone asked to reset the password for ${user.email}.\n\nOpen this link within 1 hour to choose a new password:\n${link(env, req, 'reset', token)}\n\nIf this was not you, ignore this email; your password is unchanged.`));
     }
     // Same answer whether or not the account exists (no account discovery).
     return json({ ok: true, delivery: c.emailDelivery, message: c.emailDelivery === 'email' ? 'If that email belongs to an account, a reset link is on its way. It works for 1 hour.' : 'Email is not switched on for this server yet, so ask your organisation administrator to send you a reset link from Organisation & access.' });
@@ -191,7 +191,7 @@ async function route(req, env, ctx, url, p) {
     const purpose = cred ? 'reset' : 'invite';
     const issued = await A.issueLink(env, L, target, purpose, user.id);
     const href = link(env, req, purpose, issued.token);
-    const emailed = await A.sendMail(env, target.email, purpose === 'invite' ? `You are invited to Parasyte PCS (${target.orgName})` : 'Your Parasyte PCS password reset link', `${user.name} (${user.orgName}) ${purpose === 'invite' ? 'invited you to the Parasyte Port Community System' : 'sent you a password reset link'}.\n\nOpen this link to set your password${purpose === 'invite' ? ' (valid 7 days)' : ' (valid 1 hour)'}:\n${href}`);
+    const emailed = await A.sendMail(env, target.email, purpose === 'invite' ? `You are invited to APAPA Technologies PCS (${target.orgName})` : 'Your APAPA Technologies PCS password reset link', `${user.name} (${user.orgName}) ${purpose === 'invite' ? 'invited you to the APAPA Technologies Port Community System' : 'sent you a password reset link'}.\n\nOpen this link to set your password${purpose === 'invite' ? ' (valid 7 days)' : ' (valid 1 hour)'}:\n${href}`);
     return json({ purpose, link: href, emailed, expiresAt: issued.expiresAt });
   }
 
@@ -212,7 +212,7 @@ async function route(req, env, ctx, url, p) {
       const invitee = await L.user(result.userId);
       const issued = await A.issueLink(env, L, invitee, 'invite', user.id);
       const href = link(env, req, 'invite', issued.token);
-      const emailed = await A.sendMail(env, invitee.email, `You are invited to Parasyte PCS (${invitee.orgName})`, `${user.name} (${user.orgName}) invited you to the Parasyte Port Community System as ${invitee.title}.\n\nOpen this link within 7 days to set your password:\n${href}`);
+      const emailed = await A.sendMail(env, invitee.email, `You are invited to APAPA Technologies PCS (${invitee.orgName})`, `${user.name} (${user.orgName}) invited you to the APAPA Technologies Port Community System as ${invitee.title}.\n\nOpen this link within 7 days to set your password:\n${href}`);
       extra = { invite: { link: href, emailed, expiresAt: issued.expiresAt } };
     }
     if (type === 'user.setActive' && payload.active === false) { await A.endAllSessions(env, payload.userId); await L.kick(payload.userId); }

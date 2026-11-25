@@ -134,8 +134,8 @@ export async function mfaBegin(env, user) {
   if (cred?.totp_enabled) throw new AuthError(409, '2-step verification is already on. Turn it off first to move it to a new phone.', 'STATE');
   const secret = newTotpSecret();
   await env.DB.prepare('UPDATE credentials SET totp_secret = ?, totp_enabled = 0 WHERE user_id = ?').bind(await sealSecret(requireSecret(env), secret), user.id).run();
-  const label = encodeURIComponent(`Parasyte PCS:${user.email}`);
-  return { secret, otpauth: `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent('Parasyte PCS')}&algorithm=SHA1&digits=6&period=30` };
+  const label = encodeURIComponent(`APAPA Technologies PCS:${user.email}`);
+  return { secret, otpauth: `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent('APAPA Technologies PCS')}&algorithm=SHA1&digits=6&period=30` };
 }
 export async function mfaEnable(env, ledger, user, code) {
   const cred = await getCred(env, user.id);
