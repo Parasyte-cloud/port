@@ -43,7 +43,7 @@ browser ──HTTPS/WebSocket──▶ Worker (worker/index.js)        sign-in, 
 1. `npx wrangler login`
 2. The D1 database `parasyte-pcs` already exists with its tables, and its id is in `wrangler.worker.jsonc` (for a fresh account: `npx wrangler d1 create parasyte-pcs`, paste the id, then `npx wrangler d1 migrations apply parasyte-pcs --remote -c wrangler.worker.jsonc`).
 3. `openssl rand -base64 48 | npx wrangler secret put PCS_SECRET -c wrangler.worker.jsonc` (keep it: rotating it invalidates every password).
-4. Optional: `SETUP_TOKEN` (needed when `DEMO_MODE=off`, to create the first Port Authority administrator with `POST /api/setup`), and `RESEND_API_KEY` + `MAIL_FROM` for real invitation and reset emails. Without email, administrators copy the invitation link from the screen and send it themselves, and self-service reset is switched off.
+4. Optional: `SETUP_TOKEN` (needed when `DEMO_MODE=off`, to create the first Port Authority administrator with `POST /api/setup`), `RESEND_API_KEY` + `MAIL_FROM` for real e-mail (invitations, resets and every notification), and `TERMII_API_KEY` + `TERMII_SENDER_ID` for real SMS on action and warning notifications. Each outbound message's provider answer is shown under Integrations; seeded demo organisations have fictional contacts and are never messaged. Without email, administrators copy the invitation link from the screen and send it themselves, and self-service reset is switched off.
 5. `npm run deploy:worker` (applies D1 migrations, builds `build/site`, deploys).
 
 Set `DEMO_MODE`, `SEED` and `APP_URL` in `wrangler.worker.jsonc`. The existing Cloudflare Pages showcase keeps using `wrangler.toml` and `dist/`.

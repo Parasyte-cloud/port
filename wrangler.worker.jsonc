@@ -29,5 +29,6 @@
   //   PCS_SECRET     required, 32+ random characters. Keys password pepper, 2FA encryption, socket tickets.
   //                  Do not rotate without resetting every password: existing hashes depend on it.
   //   SETUP_TOKEN    optional, 16+ characters, enables POST /api/setup for the first administrator.
-  //   RESEND_API_KEY + MAIL_FROM   optional, turns on real email for invites and self-service reset.
+  //   RESEND_API_KEY + MAIL_FROM   optional, turns on real email for invites, reset and every notification.
+  //   TERMII_API_KEY + TERMII_SENDER_ID   optional, turns on real SMS for action/warning notifications.
 }

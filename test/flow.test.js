@@ -93,14 +93,43 @@ test('full 12-step flow: register → manifest → declare → pay → release �
   ex('gate@demo.pcs', 'gate.out', { token: gp1.token, plate: 'LND111AA' });
   assert.throws(() => ex('gate@demo.pcs', 'gate.out', { token: gp1.token, plate: 'LND-111AA' }), /used/);
   ex('gate@demo.pcs', 'gate.out', { token: gp2.token, plate: 'LND-222BB' });
-  // 12. Close.
+  // 12. Close. One payment is left unreconciled on purpose: closing reports it and tells the bank.
+  const ucb = org('Unity Commerce Bank');
+  const pays = () => Object.values(E.state.payments).filter((p) => p.invoiceIds.some((i) => E.state.invoices[i].blId === blId));
+  // The bank is told about every payment it must settle, linked to the shipment (finding from the first demo run).
+  assert.equal(E.state.notifications.filter((n) => n.orgId === ucb && n.ref?.id === blId && /settlement/.test(n.title)).length, pays().length);
+  const [last, ...rest] = pays().reverse();
+  ex('bank@demo.pcs', 'payment.reconcile', { paymentIds: rest.map((p) => p.id) });
+  assert.ok(E.state.notifications.some((n) => n.orgId === reg.orgId && /Payment settled/.test(n.title)));
   ex('tess@test.ng', 'delivery.confirm', { blId });
   assert.equal(bl().stage, 'CLOSED'); assert.ok(bl().kpi.dwellHours > 0);
+  assert.equal(bl().kpi.unsettledPayments, 1); assert.ok(!bl().milestones.settled);
+  assert.ok(E.state.notifications.some((n) => n.orgId === ucb && /Settlement outstanding/.test(n.title)));
+  ex('bank@demo.pcs', 'payment.reconcile', { paymentIds: [last.id] });
+  assert.ok(bl().milestones.settled);
+  // Public tracker lists milestones in the order they happened (finding from the first demo run).
+  const tl = q('tess@test.ng', 'track', { ref: 'TESTBL001' }) || makeQueries(E).run(null, 'track', { ref: 'TESTBL001' });
+  const done = tl.timeline.filter((e) => e.at);
+  assert.deepEqual(done.map((e) => e.at), [...done.map((e) => e.at)].sort((a, b) => a - b));
+  assert.ok(done.findIndex((e) => e.key === 'declared') < done.findIndex((e) => e.key === 'discharged'), 'pre-arrival declaration shows before discharge');
+  // Every message is queued for real delivery, never marked as sent by the engine.
+  assert.ok(E.state.outbox.length && E.state.outbox.filter((m) => m.at > Date.UTC(2026, 10, 20, 9)).every((m) => m.status === 'QUEUED'));
   // 11. Every party was notified along the way.
   for (const o of [reg.orgId, org('Lagos Electronics Hub'), org('Bight Container Terminal (Apapa)'), org('Eko Haulage')]) assert.ok(E.state.notifications.some((n) => n.orgId === o && n.ref?.id === blId));
   // Audit: trace has the full story and chain verifies.
   const trace = E.state.audit.filter((a) => a.trace === 'TRC-TESTBL001').map((a) => a.action);
   for (const a of ['bl.manifested', 'declaration.lodged', 'payment.captured', 'customs.released', 'terminal.released', 'release.ordered', 'gate.denied', 'gate.out', 'shipment.closed']) assert.ok(trace.includes(a), a);
+  assert.ok(E.verifyAudit().ok);
+});
+
+test('the valuation exchange rate is posted by the Customs administrator, with its source', () => {
+  const { E, ex } = world();
+  assert.throws(() => ex('npa.admin@demo.pcs', 'customs.fx.set', { rate: 1400, source: 'x', effectiveFrom: '2026-11-25' }), /not permitted/);
+  assert.throws(() => ex('npa.admin@demo.pcs', 'settings.update', { changes: { fxNgnPerUsd: 1400 } }), /Customs/);
+  assert.throws(() => ex('customs@demo.pcs', 'customs.fx.set', { rate: 3, source: 'x', effectiveFrom: '2026-11-25' }), /rate/);
+  ex('customs@demo.pcs', 'customs.fx.set', { rate: 1412.5, source: 'CBN official rate', effectiveFrom: '2026-11-25' });
+  assert.equal(E.state.settings.fxNgnPerUsd, 1412.5);
+  assert.equal(E.state.audit.at(-1).action, 'customs.fx.set');
   assert.ok(E.verifyAudit().ok);
 });
 

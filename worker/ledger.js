@@ -14,6 +14,7 @@ import { createEngine, PcsError } from '../core/engine.js';
 import { makeQueries } from '../core/queries.js';
 import { buildSeed, DEMO_PASSWORD } from '../core/seed.js';
 import { syncDemoCredentials } from './auth.js';
+import { deliver } from './deliver.js';
 
 const CLIENT_BLOCKED = /^(auth\.|system\.)/; // only the server itself may write sign-in and system events
 const toErr = (e) => ({ error: { code: e.code || 'INTERNAL', message: e instanceof PcsError || e.code ? e.message : 'Internal error', details: e.details } });
@@ -63,7 +64,7 @@ export class Ledger extends DurableObject {
     return this.serial(async () => {
       if (fromClient && CLIENT_BLOCKED.test(type)) return toErr(new PcsError('FORBIDDEN', 'This action is reserved for the platform'));
       if (userId) { const u = this.E.state.users[userId]; if (!u) return toErr(new PcsError('AUTH', 'Unknown user')); }
-      const before = this.E.state.notifications.length;
+      const before = this.E.state.notifications.length; const outBefore = this.E.state.outbox.length;
       let result; this.pending = null;
       try { result = this.E.execute({ type, userId, at: this.E.now(Date.now()), payload }); }
       catch (e) { this.metrics.commandErrors++; return toErr(e); }
@@ -76,6 +77,8 @@ export class Ledger extends DurableObject {
       }
       this.metrics.commands++; this.metrics.byType[type] = (this.metrics.byType[type] || 0) + 1;
       this.broadcast(rec, this.E.state.notifications.slice(before));
+      const msgs = structuredClone(this.E.state.outbox.slice(outBefore));
+      if (msgs.length) { const orgs = this.E.state.orgs; const job = deliver(this.env, msgs, orgs).catch((e) => console.error('delivery failed', e)); this.ctx.waitUntil ? this.ctx.waitUntil(job) : null; }
       return { ok: true, result: structuredClone(result || {}) };
     });
   }

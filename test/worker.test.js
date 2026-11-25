@@ -183,6 +183,16 @@ test('two people on two devices complete steps 1-12 on one shipment, with live h
   // 11. Notifications reached the parties; the Customs officer's screen saw every step live.
   const notes = await A.q('notifications');
   assert.ok(notes.some((n) => n.ref?.id === blId));
+  // Each notification message was handed to the delivery layer and its real outcome recorded
+  // (no provider is configured in tests, and seeded demo contacts are never messaged).
+  await new Promise((r) => setTimeout(r, 500));
+  const integ = await A.q('integration');
+  assert.equal(integ.delivery.email, 'not configured');
+  const mine = integ.outbox.filter((m) => m.to === 'ops@testfwd.ng');
+  assert.ok(mine.length && mine.every((m) => m.status === 'NOT SENT: no e-mail provider configured'), JSON.stringify(mine.slice(0, 2)));
+  await as(A, 'lehub@demo.pcs');
+  assert.ok((await A.q('integration')).outbox.some((m) => /demo organisation contact/.test(m.status)));
+  A.token = tessTok;
   assert.ok(B.events.some((e) => e.type === 'delivery.confirm'), 'device B saw the close live');
   // Audit trail: the shipment's trace tells the whole story, sign-in events included, and the chain verifies.
   await as(B, 'auditor@demo.pcs');

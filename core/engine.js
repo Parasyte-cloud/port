@@ -19,7 +19,7 @@ function emptyState() {
     seq: 0, seed: '', lastAt: 0, clockOffset: 0, settings: { ...R.DEFAULT_SETTINGS }, counters: {},
     orgs: {}, users: {}, vessels: {}, voyages: {}, manifests: {}, bls: {}, containers: {},
     declarations: {}, services: {}, invoices: {}, payments: {}, releaseOrders: {}, gatePasses: {},
-    parties: {}, importerHistory: {}, reads: {}, apiKeys: {}, loginFails: {},
+    fx: null, parties: {}, importerHistory: {}, reads: {}, apiKeys: {}, loginFails: {},
     audit: [], lastHash: 'GENESIS', notifications: [], outbox: [],
   };
 }
@@ -89,9 +89,11 @@ export function createEngine() {
           const org = S.orgs[orgId]; if (!org) continue;
           const n = { id: nextId('NTF', 6), at, orgId, title, body, ref: ref || null, severity };
           S.notifications.push(n);
-          S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'email', to: org.email, subject: title, status: 'SENT (simulated)' });
-          if (severity !== 'info' && org.phone) S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'sms', to: org.phone, subject: title, status: 'SENT (simulated)' });
-          if (org.webhookUrl) S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'webhook', to: org.webhookUrl, subject: `${ref ? ref.type : 'event'}: ${title}`, status: 'QUEUED (simulated)' });
+          // Queued here; the hosting layer (worker/deliver.js) hands each message to the e-mail, SMS or webhook
+          // provider and records the provider's answer. In the in-browser showcase nothing leaves the browser.
+          S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'email', to: org.email, subject: title, body, ntf: n.id, status: 'QUEUED' });
+          if (severity !== 'info' && org.phone) S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'sms', to: org.phone, subject: title, body, ntf: n.id, status: 'QUEUED' });
+          if (org.webhookUrl) S.outbox.push({ id: nextId('MSG', 6), at, orgId, channel: 'webhook', to: org.webhookUrl, subject: `${ref ? ref.type : 'event'}: ${title}`, body, ntf: n.id, ref: ref || null, status: 'QUEUED' });
         }
       },
     };
@@ -105,6 +107,11 @@ export function createEngine() {
     if (!p.kinds.includes(kind)) p.kinds.push(kind);
     p.uses++;
     return p;
+  }
+
+  function unsettledOf(bl) {
+    const ids = new Set(bl.invoiceIds.map((i) => S.invoices[i]?.paymentId).filter(Boolean));
+    return [...ids].map((id) => S.payments[id]).filter((p) => p && p.status !== 'RECONCILED');
   }
 
   function issueInvoice(ctx, { bl, type, beneficiaryOrgId, payerOrgId, lines, ref }) {
@@ -130,7 +137,7 @@ export function createEngine() {
     const cif = cifUsd * st.fxNgnPerUsd, fobNgn = fob * st.fxNgnPerUsd;
     const duty = cif * t.duty, vat = (cif + duty) * st.vatRate, ciss = fobNgn * st.cissRate, etls = cif * st.etlsRate;
     return {
-      fxRate: st.fxNgnPerUsd, cifUsd: round2(cifUsd), cifNgn: round2(cif), dutyRate: t.duty,
+      fxRate: st.fxNgnPerUsd, fxSource: S.fx ? `${S.fx.source}, effective ${S.fx.effectiveFrom} (set by ${S.fx.setByName})` : 'platform default (not an official rate)', cifUsd: round2(cifUsd), cifNgn: round2(cif), dutyRate: t.duty,
       lines: [
         { desc: `Import duty ${(t.duty * 100).toFixed(0)}% (HS ${decl.hsCode})`, qty: 1, rate: round2(duty), amount: round2(duty) },
         { desc: `VAT ${(st.vatRate * 100).toFixed(1)}%`, qty: 1, rate: round2(vat), amount: round2(vat) },
@@ -781,7 +788,7 @@ export function createEngine() {
       for (const inv of invs) { inv.status = 'PAID'; inv.paidAt = ctx.at; inv.paymentId = pay.id; }
       const traces = [...new Set(invs.map((i) => S.bls[i.blId].blNo))];
       ctx.audit('payment.captured', { type: 'payment', id: pay.id }, `Payment ${pay.ref} of NGN ${total.toLocaleString('en-US')} captured via ${bank.name} (${pay.method}) for ${invs.map((i) => i.no).join(', ')}`, { trace: `TRC-${traces[0]}` });
-      ctx.notify([bank.id], `Payment to reconcile: ${pay.ref}`, `NGN ${total.toLocaleString('en-US')} from ${ctx.actor.orgName}.`, { type: 'payment', id: pay.id }, 'action');
+      ctx.notify([bank.id], `Payment received for settlement: ${pay.ref}`, `NGN ${total.toLocaleString('en-US')} from ${ctx.actor.orgName} for B/L ${traces.join(', ')} (${invs.map((i) => i.no).join(', ')}). Reconcile to release settlement to the beneficiaries.`, { type: 'bl', id: invs[0].blId, paymentId: pay.id }, 'action');
       ctx.notify([...new Set(invs.map((i) => i.beneficiaryOrgId))], `Payment received ${pay.ref}`, `${invs.map((i) => i.no).join(', ')} paid by ${ctx.actor.orgName}.`, { type: 'bl', id: invs[0].blId }, 'success');
       for (const inv of invs) onInvoicePaid(ctx, inv);
       ctx.result = { paymentId: pay.id, ref: pay.ref };
@@ -798,7 +805,14 @@ export function createEngine() {
         const pay = S.payments[id];
         pay.status = 'RECONCILED'; pay.reconciledAt = ctx.at; pay.settlementRef = `STL-${token('STL', 8)}`;
         for (const iid of pay.invoiceIds) S.invoices[iid].status = 'RECONCILED';
-        ctx.audit('payment.reconciled', { type: 'payment', id: pay.id }, `Payment ${pay.ref} settled to beneficiaries (${pay.settlementRef})`, { trace: `TRC-${S.bls[S.invoices[pay.invoiceIds[0]].blId].blNo}` });
+        const bl = S.bls[S.invoices[pay.invoiceIds[0]].blId];
+        ctx.audit('payment.reconciled', { type: 'payment', id: pay.id }, `Payment ${pay.ref} settled to beneficiaries (${pay.settlementRef})`, { trace: `TRC-${bl.blNo}` });
+        const benef = [...new Set(pay.invoiceIds.map((i) => S.invoices[i].beneficiaryOrgId))];
+        ctx.notify([pay.payerOrgId, ...benef], `Payment settled: ${pay.ref}`, `${ctx.actor.orgName} settled NGN ${pay.total.toLocaleString('en-US')} to the beneficiaries (settlement ${pay.settlementRef}).`, { type: 'bl', id: bl.id }, 'success');
+        if (bl.milestones.closed && unsettledOf(bl).length === 0 && !bl.milestones.settled) {
+          bl.milestones.settled = ctx.at;
+          ctx.audit('shipment.settled', { type: 'bl', id: bl.id }, `All payments for closed shipment ${bl.blNo} are now settled`, { trace: blTrace(bl), system: true });
+        }
       }
     },
 
@@ -868,7 +882,11 @@ export function createEngine() {
       const firstDis = Math.min(...containersOf(bl).map((c) => c.dischargedAt));
       bl.kpi = { dwellHours: round2((m.gateOutAll - firstDis) / HOUR), clearanceHours: S.declarations[bl.declarationId] ? round2((m.customsReleased - S.declarations[bl.declarationId].lodgedAt) / HOUR) : null, endToEndHours: round2((m.delivered - m.manifested) / HOUR), releaseToGateHours: round2((m.gateOutAll - m.releaseOrdered) / HOUR) };
       ctx.audit('delivery.confirmed', { type: 'bl', id: bl.id }, `Delivery of B/L ${bl.blNo} confirmed${p.note ? ': ' + p.note : ''}`, { trace: blTrace(bl) });
-      ctx.audit('shipment.closed', { type: 'bl', id: bl.id }, `Shipment ${bl.blNo} closed. Port dwell ${bl.kpi.dwellHours}h, Customs clearance ${bl.kpi.clearanceHours}h`, { trace: blTrace(bl), system: true, data: bl.kpi });
+      const open = unsettledOf(bl);
+      bl.kpi.unsettledPayments = open.length;
+      if (!open.length) bl.milestones.settled = ctx.at;
+      ctx.audit('shipment.closed', { type: 'bl', id: bl.id }, `Shipment ${bl.blNo} closed. Port dwell ${bl.kpi.dwellHours}h, Customs clearance ${bl.kpi.clearanceHours}h${open.length ? `; ${open.length} payment(s) still awaiting bank settlement` : '; all payments settled'}`, { trace: blTrace(bl), system: true, data: bl.kpi });
+      for (const pay of open) ctx.notify([pay.bankOrgId], `Settlement outstanding: ${pay.ref}`, `Shipment ${bl.blNo} has closed but payment ${pay.ref} (NGN ${pay.total.toLocaleString('en-US')}) is not yet reconciled.`, { type: 'bl', id: bl.id, paymentId: pay.id }, 'action');
       const v = voyageOf(bl);
       ctx.notify([v.shippingOrgId, v.terminalOrgId, orgOfType('NPA')?.id, bl.forwarderOrgId, bl.consigneeOrgId], `Shipment closed: ${bl.blNo}`, 'Delivery confirmed. Records archived for reporting.', { type: 'bl', id: bl.id });
       afterChange(ctx, bl);
@@ -887,10 +905,24 @@ export function createEngine() {
       ctx.audit('clock.advanced', { type: 'system', id: 'clock' }, `Demo clock advanced by ${h}h (simulation only)`);
     },
 
+    // The valuation exchange rate is the Customs Service's to publish (it applies the CBN rate), not the Port Authority's.
+    'customs.fx.set'(ctx, p) {
+      req(p, ['rate', 'source', 'effectiveFrom']);
+      const rate = Number(p.rate);
+      if (!(rate > 100 && rate < 100000)) fail('VALIDATION', 'Enter the NGN per USD rate, e.g. 1450.25');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(p.effectiveFrom))) fail('VALIDATION', 'effectiveFrom must be a date (YYYY-MM-DD)');
+      const from = S.settings.fxNgnPerUsd;
+      S.settings.fxNgnPerUsd = rate;
+      S.fx = { rate, source: String(p.source).slice(0, 200), effectiveFrom: String(p.effectiveFrom), setBy: ctx.actor.userId, setByName: `${ctx.actor.name}, ${ctx.actor.orgName}`, setAt: ctx.at };
+      ctx.audit('customs.fx.set', { type: 'system', id: 'fx' }, `Customs valuation rate set to NGN ${rate} per USD from ${S.fx.effectiveFrom} (${S.fx.source})`, { data: { from, to: rate, source: S.fx.source, effectiveFrom: S.fx.effectiveFrom } });
+      ctx.notify(Object.values(S.orgs).filter((o) => ['FORWARDER', 'IMPORTER', 'NPA', 'BANK'].includes(o.type) && o.status === 'ACTIVE').map((o) => o.id), `Customs exchange rate: NGN ${rate}/USD`, `Applies to declarations valued from ${S.fx.effectiveFrom}. Source: ${S.fx.source}.`, null, 'info');
+    },
+
     'settings.update'(ctx, p) {
       const changes = p.changes || {}; const diff = {};
       for (const [k, val] of Object.entries(changes)) {
         if (!(k in R.DEFAULT_SETTINGS)) fail('VALIDATION', `Unknown setting ${k}`);
+        if (k === 'fxNgnPerUsd' && Number(val) !== S.settings.fxNgnPerUsd) fail('FORBIDDEN', 'The valuation exchange rate is set by the Customs Service');
         const typed = typeof R.DEFAULT_SETTINGS[k] === 'number' ? Number(val) : typeof R.DEFAULT_SETTINGS[k] === 'boolean' ? !!val : val;
         if (typeof typed === 'number' && !(typed >= 0)) fail('VALIDATION', `${k} must be a non-negative number`);
         if (S.settings[k] !== typed) { diff[k] = { from: S.settings[k], to: typed }; S.settings[k] = typed; }
