@@ -1,0 +1,4 @@
+# Cloudflare Pages: static showcase build (the full PCS engine runs in each tester's browser).
+name = "parasyte-pcs"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-01-01"

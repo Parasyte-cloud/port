@@ -1,0 +1,22 @@
+{
+  "name": "parasyte-pcs",
+  "version": "1.0.0",
+  "description": "Port Community System showcase",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build": "node scripts/build-standalone.mjs"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  }
+}
