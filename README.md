@@ -41,7 +41,7 @@ browser ──HTTPS/WebSocket──▶ Worker (worker/index.js)        sign-in, 
 ### Deploy
 
 1. `npx wrangler login`
-2. `npx wrangler d1 create parasyte-pcs` and paste the printed `database_id` into `wrangler.worker.jsonc`.
+2. The D1 database `parasyte-pcs` already exists with its tables, and its id is in `wrangler.worker.jsonc` (for a fresh account: `npx wrangler d1 create parasyte-pcs`, paste the id, then `npx wrangler d1 migrations apply parasyte-pcs --remote -c wrangler.worker.jsonc`).
 3. `openssl rand -base64 48 | npx wrangler secret put PCS_SECRET -c wrangler.worker.jsonc` (keep it: rotating it invalidates every password).
 4. Optional: `SETUP_TOKEN` (needed when `DEMO_MODE=off`, to create the first Port Authority administrator with `POST /api/setup`), and `RESEND_API_KEY` + `MAIL_FROM` for real invitation and reset emails. Without email, administrators copy the invitation link from the screen and send it themselves, and self-service reset is switched off.
 5. `npm run deploy:worker` (applies D1 migrations, builds `build/site`, deploys).

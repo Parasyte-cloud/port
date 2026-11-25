@@ -8,8 +8,8 @@
   "build": { "command": "node scripts/build-site.mjs" },
   "assets": { "directory": "./build/site", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
   "d1_databases": [
-    // Replace database_id with the id printed by: npx wrangler d1 create parasyte-pcs
-    { "binding": "DB", "database_name": "parasyte-pcs", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+    // D1 database parasyte-pcs (created 2026-11-25, Western Europe; tables from migrations/0001_init.sql loaded)
+    { "binding": "DB", "database_name": "parasyte-pcs", "database_id": "8a3c0090-bbf7-4da0-870c-4f1083e54c93", "migrations_dir": "migrations" }
   ],
   "durable_objects": { "bindings": [{ "name": "LEDGER", "class_name": "Ledger" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Ledger"] }],
