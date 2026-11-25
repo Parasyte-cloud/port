@@ -245,7 +245,7 @@ export function makeQueries(E) {
     integration(a) {
       return { outbox: S().outbox.filter((m) => sees.all(a) || m.orgId === a.orgId).slice(-100).reverse(), apiKey: S().apiKeys[a.orgId] ? { prefix: S().apiKeys[a.orgId].prefix, createdAt: S().apiKeys[a.orgId].createdAt } : null, commands: E.log.length };
     },
-    settings(a) { return { settings: S().settings, defaults: R.DEFAULT_SETTINGS }; },
+    settings(a) { return { settings: S().settings, defaults: R.DEFAULT_SETTINGS, fx: S().fx }; },
   };
 
   function track(ref) {
@@ -254,7 +254,12 @@ export function makeQueries(E) {
     const bl = c ? S().bls[c.blId] : Object.values(S().bls).find((b) => b.blNo === r);
     if (!bl) return null;
     const v = S().voyages[bl.voyageId];
-    return { blNo: bl.blNo, vessel: v.vesselName, voyageNo: v.voyageNo, port: R.PORTS[v.port].name, stage: bl.stage, milestones: bl.milestones, containers: bl.containerIds.map((id) => ({ no: S().containers[id].no, size: S().containers[id].size, status: S().containers[id].status })) };
+    const LABELS = { manifested: 'Manifested', declared: 'Declared to Customs', discharged: 'Discharged to yard', customsReleased: 'Customs released', doIssued: 'Delivery order issued', terminalReleased: 'Terminal released', releaseOrdered: 'Release order issued', gateOutFirst: 'First container left the port', gateOutAll: 'Left the port', delivered: 'Delivered', settled: 'All payments settled' };
+    const m = bl.milestones;
+    // Public timeline in the order things actually happened (pending steps last, in process order).
+    const timeline = Object.keys(LABELS).filter((k) => !(k === 'gateOutFirst' && m.gateOutFirst === m.gateOutAll)).map((k, i) => ({ key: k, label: LABELS[k], at: m[k] || null, i }))
+      .sort((a, b) => (a.at == null) - (b.at == null) || (a.at ?? 0) - (b.at ?? 0) || a.i - b.i).map(({ i, ...e }) => e);
+    return { blNo: bl.blNo, vessel: v.vesselName, voyageNo: v.voyageNo, port: R.PORTS[v.port].name, stage: bl.stage, milestones: bl.milestones, timeline, containers: bl.containerIds.map((id) => ({ no: S().containers[id].no, size: S().containers[id].size, status: S().containers[id].status })) };
   }
 
   return {

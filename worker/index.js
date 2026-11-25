@@ -5,6 +5,7 @@ import * as A from './auth.js';
 import { AuthError, cfg } from './auth.js';
 import { sha256hex, signTicket, verifyTicket, randomToken } from './crypto.js';
 import { DEMO_PASSWORD } from '../core/seed.js';
+import { withDeliveryStatus } from './deliver.js';
 export { Ledger } from './ledger.js';
 
 const SEC_HEADERS = {
@@ -227,6 +228,7 @@ async function route(req, env, ctx, url, p) {
   }
   if (p === '/api/dr/rebuild' && M === 'POST') { if (!['NPA', 'AUDIT'].includes(user.orgType)) fail('FORBIDDEN', 'Not permitted'); return json(await L.rebuild()); }
   if (p === '/api/export/audit.csv') return new Response(await L.auditCsv(user.id, url.searchParams.get('q')), { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="pcs-audit.csv"', ...SEC_HEADERS } });
+  if (p === '/api/q/integration') return json(await withDeliveryStatus(env, unwrap(await L.query(user.id, 'integration', {}))));
   if (p.startsWith('/api/q/')) return json(unwrap(await L.query(user.id, p.slice(7), Object.fromEntries(url.searchParams))));
   fail('NOT_FOUND', 'Not found');
 }

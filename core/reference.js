@@ -44,6 +44,7 @@ export const PERMISSIONS = {
   'notification.read':   ['*'],
   'clock.advance':       ['NPA:admin'],
   'settings.update':     ['NPA:admin'],
+  'customs.fx.set':      ['CUSTOMS:admin'],
 };
 
 // Which org type decides each service request type, and the SLA in hours (GUESS).
@@ -82,7 +83,7 @@ export const TARIFF = {
 export const CPC = { '4000': 'Home use (import for consumption)', '7100': 'Warehousing', '8000': 'Transit' };
 
 export const DEFAULT_SETTINGS = {
-  fxNgnPerUsd: 1550,          // GUESS: exchange rate used for valuation
+  fxNgnPerUsd: 1550,          // Placeholder until Customs posts the official rate with customs.fx.set (source + date are recorded)
   cifFactor: 1.10,            // GUESS: CIF estimated as FOB x 1.10 when freight/insurance not declared
   vatRate: 0.075,             // VAT on (CIF + duty)
   cissRate: 0.01,             // Comprehensive Import Supervision Scheme, on FOB (GUESS basis)
